@@ -328,9 +328,10 @@ ask TAILNET "Tailnet name (e.g. tail1234.ts.net):"
 TAILNET="${TAILNET#https://}"; TAILNET="${TAILNET%/}"
 write_env TAILNET "$TAILNET"
 open_url "https://login.tailscale.com/admin/acls/file"
-step "In the policy file, check there's a nodeAttrs entry granting \"funnel\", e.g."
-note '    "nodeAttrs": [{ "target": ["autogroup:member"], "attr": ["funnel"] }]'
-step "Add it if missing and Save."
+step "In the policy file, look for a \"nodeAttrs\" entry granting \"funnel\"."
+step "If there is none, paste this on a new line just before the file's last closing }:"
+note '    "nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}],'
+step "Click Save."
 pause "Press Enter when MagicDNS, HTTPS and Funnel are set."
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
