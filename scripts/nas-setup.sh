@@ -261,10 +261,12 @@ if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$NAS" true 2>/dev/null; then
     say "You have no ~/.ssh/id_ed25519 key yet; creating one (choose a passphrase or leave empty)."
     ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519"
   fi
-  say "Copying your public key to the NAS. Enter your DSM password when asked."
-  ssh-copy-id -i "$HOME/.ssh/id_ed25519.pub" "$NAS"
-  say "Tightening home folder permissions (sshd ignores keys in a group-writable home)."
-  ssh "$NAS" 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
+  # One plain ssh call: installs the key and fixes permissions (sshd ignores
+  # keys in a group-writable home), so there is exactly one password prompt.
+  say "Copying your public key to the NAS. Enter your DSM password once when asked."
+  ssh -o PreferredAuthentications=password,keyboard-interactive "$NAS" \
+    'umask 077 && mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys' \
+    < "$HOME/.ssh/id_ed25519.pub"
   ssh -o BatchMode=yes -o ConnectTimeout=5 "$NAS" true \
     || { warn "Key login still fails. Check the two DSM settings above and re-run."; exit 1; }
 fi
