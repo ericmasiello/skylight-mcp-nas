@@ -1,155 +1,134 @@
 # skylight-mcp-nas
 
-Runs [skylight-mcp](https://www.npmjs.com/package/skylight-mcp) 1.6.2 in Docker on a Synology NAS, behind a GitHub OAuth sign-in proxy and a Tailscale Funnel sidecar, so it can be added as a claude.ai custom connector at `https://skylight.<tailnet>.ts.net/mcp`.
+Serves [skylight-mcp](https://www.npmjs.com/package/skylight-mcp) from a Synology NAS so claude.ai and OpenCode can use the family's Skylight from anywhere, at `https://skylight.<tailnet>.ts.net/mcp`, behind a GitHub sign-in limited to one account.
 
 ```
-claude.ai ─► https://skylight.<tailnet>.ts.net/mcp
-          ─► ts (Tailscale Funnel, TLS)  ─► 127.0.0.1:8000
-          ─► auth (mcp-auth-proxy, GitHub sign-in) ─► 127.0.0.1:8001/mcp
-          ─► skylight (supergateway --stateful) ─► one skylight-mcp child per client session (stdio)
+client (claude.ai, OpenCode)
+  ─► ts        Tailscale Funnel, public HTTPS on 443        ─► 127.0.0.1:8000
+  ─► auth      mcp-auth-proxy, GitHub sign-in (one account)  ─► 127.0.0.1:8001/mcp
+  ─► skylight  our gateway (src/server.ts): one process, one Skylight sign-in
 ```
 
 All three containers share the `ts` container's network namespace. No host ports are published.
+
+Terms (Skylight server, gateway, Skylight sign-in, verification code, gated write tool, confirm gate, …) are defined in [GLOSSARY.md](GLOSSARY.md). Decisions:
+
+- [ADR 0001](docs/adr/0001-own-gateway-instead-of-supergateway.md): our own gateway instead of supergateway, so every MCP session shares one Skylight sign-in.
+- [ADR 0002](docs/adr/0002-server-side-tool-blocklist.md): admin write tools are blocked in the server ([src/blocked-tools.ts](src/blocked-tools.ts)), for every client.
 
 ## Pinned versions
 
 | Component | Pin |
 | --- | --- |
-| skylight-mcp | 1.6.2 (`package.json`, `package-lock.json`) |
-| supergateway | 4.2.2 |
-| Base image | `node:22.23.5-slim@sha256:e9f565d3…` |
-| Tailscale | `tailscale/tailscale:v1.104.4` (v1.104.5/6 exist on GitHub but weren't on Docker Hub when pinned) |
+| skylight-mcp | 1.6.2 |
+| @chrischall/mcp-utils | 3.9.0 (skylight-mcp accepts `^3.7.2`; upstream tested 1.6.2 with 3.7.2) |
+| @modelcontextprotocol/server, /node, /client | 2.4.0, 2.1.2, 2.4.0 |
+| TypeScript, @types/node | 7.0.2, 26.6.6 (type-check only) |
+| Base image | `node:26.13.1-slim@sha256:e6bedef2…` (Node runs `src/*.ts` directly) |
+| Tailscale | `tailscale/tailscale:v1.104.4` |
 | Auth proxy | `ghcr.io/sigbit/mcp-auth-proxy:v2.10.2` |
 
-The lockfile must be generated with the same npm as the image (`npm ci` rejects a lockfile produced by a different npm here). To change a pin, regenerate it in the pinned image:
+The lockfile must come from the image's npm (11.20.0). To change a pin, edit `package.json` and regenerate:
 
 ```bash
-IMG=node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+IMG=node:26.13.1-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc
 rm -f package-lock.json
 docker run --rm -v "$PWD:/w" -w /tmp $IMG sh -c '
-  cp /w/package.json . && npm install --ignore-scripts >/dev/null 2>&1
-  rm -rf node_modules && npm install --ignore-scripts --package-lock-only >/dev/null 2>&1
-  npm ci --ignore-scripts && cp package-lock.json /w/ && chown $(stat -c %u:%g /w) /w/package-lock.json'
+  cp /w/package.json . && npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1
+  rm -rf node_modules && npm ci --ignore-scripts --no-audit >/dev/null
+  cp package-lock.json /w/ && chown $(stat -c %u:%g /w) /w/package-lock.json'
 ```
 
-## What was verified (spec open questions)
+On a skylight-mcp upgrade, also compare `node_modules/skylight-mcp/dist/index.js` with [src/skylight.ts](src/skylight.ts) (registrar list, `makeGetClient`) and check that every name in `src/blocked-tools.ts` still exists. The gateway refuses to start if a blocked tool is missing, but it can't catch a new admin tool.
 
-| Question | Answer |
-| --- | --- |
-| One skylight-mcp process for all requests? | **No.** supergateway 4.2.2 stateless mode starts a new child per request; stateful mode starts one child per client session (`stdioToStatelessStreamableHttp.js`, `statefulSessions.js`). The entrypoint uses `--stateful`, so the emailed-login-code flow works inside one Inspector session. Confirm tokens still verify across children because `MCP_CONFIRM_SECRET` is shared. Children share `/data/.skylight-mcp/tokens.json`. |
-| Does mcp-auth-proxy do DCR? | **Yes.** `POST /.idp/register` returned 201 for a claude.ai redirect URI; `/.well-known/oauth-authorization-server` lists `registration_endpoint`, S256 PKCE. |
-| Backend URL syntax | `command: ["--", "http://127.0.0.1:8001/mcp"]` works (image entrypoint is the binary). For HTTP backends the proxy keeps the backend's own path, so `/mcp` is exposed as `/mcp`. |
-| GitHub callback path | `{EXTERNAL_URL}/.auth/github/callback` |
-| 401 `WWW-Authenticate` header | **Not emitted.** v2.10.2 returns `401 {"error":"Unauthorized"}` with no `WWW-Authenticate`, but serves `/.well-known/oauth-protected-resource` and the authorization-server metadata. Acceptance test 4 is therefore: 401, and 200 JSON from the protected-resource URL. Whether claude.ai discovers the flow without the header is only proven by test 10. The proxy lists Claude Web as verified. |
-| 2026-07-28 stateless revision through supergateway | supergateway's README says it supports legacy MCP and 2026-07-28, and falls back for clients that negotiate. Stateful mode keeps legacy sessions. The local test (Inspector over HTTP) passed. Not exercised against claude.ai. |
-| Frames / plan type / blocked tools | Still open for you; see the end. |
+## Develop and test locally
 
-## Local test (no Tailscale, no real credentials)
+Use Node 26 (`nvm use` reads `.nvmrc`).
 
 ```bash
+npm ci
+npm run typecheck      # tsc 7, no emit
+npm test               # node --test: blocked tools, shared Skylight sign-in (fake Skylight, no network)
 ./scripts/smoke-test.sh
 ```
 
-Runs acceptance tests 1 to 3 with temporary dummy secrets: 116 tools listed, no credential in the image or repo, and an empty secret makes the entrypoint exit 1 before supergateway starts. It uses `compose.local.yaml`, which disables `ts` and `auth` and publishes `127.0.0.1:8001` only.
+`smoke-test.sh` builds the image (the build itself runs the type-check and tests), then runs local acceptance tests 1 to 4 with dummy secrets: 106 tools listed with the 10 blocked tools absent, no credential in the image or repo, an empty secret stops the entrypoint before the gateway starts, and `npm audit` is clean. It uses `compose.local.yaml`, which disables `ts` and `auth` and publishes `127.0.0.1:8001`.
 
-## NAS setup (you)
+## First-time NAS setup
 
-### 1. Folders and secrets
+You need: DSM 7.2+ with **Container Manager** and **Git Server** (Package Center), SSH on (Control Panel → Terminal & SNMP), and this repo **public** on GitHub (the NAS clones it over plain HTTPS; nothing in it is secret).
 
-Over DSM SSH:
+1. **Run the wizard on your laptop:** `scripts/nas-setup.sh`. It walks you through:
+   1. SSH key login to the NAS (sets it up if needed)
+   2. checking the NAS (DSM version, the `docker` folder, git, docker)
+   3. cloning the repo into `/volume1/docker/skylight-mcp-nas`
+   4. Tailscale: tailnet name, MagicDNS, HTTPS certificates, Funnel in the policy file
+   5. a Tailscale auth key
+   6. a GitHub OAuth app
+   7. your Skylight email and password, plus a generated confirm secret
+   8. file ownership (sudo)
 
-```bash
-sudo mkdir -p /volume1/docker/skylight-mcp-nas /volume1/docker/secrets/skylight
-# copy this repo into /volume1/docker/skylight-mcp-nas, then:
-cd /volume1/docker/skylight-mcp-nas
-sudo mkdir -p data ts-state auth-data
-sudo chown 1000:1000 data                       # skylight runs as node (UID 1000)
+   Secrets go from a hidden prompt straight into `/volume1/docker/secrets/skylight` on the NAS over SSH. They are never written on your laptop. Non-secret answers (NAS address, tailnet name, GitHub username) are saved in `.nas-setup.env` (gitignored). Re-running keeps existing secrets unless you choose to replace one.
+2. **Ship the first version:** `scripts/release.sh` (see below). Choose `minor` to get `v0.1.0`.
+3. **Disable key expiry:** at <https://login.tailscale.com/admin/machines>, click `skylight` → … → Disable key expiry.
+4. **Add the claude.ai connector:** Settings → Connectors → Add custom connector → URL `https://skylight.<tailnet>.ts.net/mcp` → Connect, then sign in with GitHub. The 10 admin tools are already gone. Use the connector's tool switches for anything else you don't want claude.ai to call.
+5. **First Skylight sign-in:** in claude.ai, ask Claude to run `skylight_healthcheck`. If Skylight emails a verification code, give it to Claude to submit with `skylight_submit_login_code`. Any client and any chat can submit it, because all MCP sessions share one Skylight sign-in. The token cache in `data/` carries over restarts and redeploys.
+6. **OpenCode:** replace the local `npx` skylight entry in your OpenCode config with the hosted one, then run `opencode mcp auth skylight` to sign in with GitHub:
 
-cd /volume1/docker/secrets/skylight
-# skylight_email, skylight_password: your Skylight login. No trailing newline needed.
-printf '%s' 'you@example.com'   | sudo tee skylight_email    >/dev/null
-printf '%s' 'REAL_PASSWORD'     | sudo tee skylight_password >/dev/null
-openssl rand -hex 32 | tr -d '\n' | sudo tee mcp_confirm_secret >/dev/null
-# proxy.env and ts.env: start from secrets.example/*.env and fill in (steps 2 and 3)
-sudo chown 1000:1000 skylight_email skylight_password mcp_confirm_secret
-sudo chmod 400 skylight_* mcp_confirm_secret proxy.env ts.env
-sudo chmod 700 .
-```
+   ```json
+   "skylight": { "type": "remote", "url": "https://skylight.<tailnet>.ts.net/mcp" }
+   ```
 
-Keep the secrets folder out of any browsable DSM shared folder and out of Synology Drive sync. Back it up only to an encrypted destination. Docker reads `env_file` as root, so `proxy.env` and `ts.env` can stay root-owned.
+   Don't keep both. A local `npx` copy has its own Skylight sign-in, and the two would trigger verification codes against each other. Whether OpenCode's OAuth flow works with mcp-auth-proxy is not yet tested.
 
-### 2. GitHub OAuth app
+## Shipping a change
 
-github.com/settings/developers → New OAuth App:
-- Homepage URL: `https://skylight.<tailnet>.ts.net`
-- Callback URL: `https://skylight.<tailnet>.ts.net/.auth/github/callback`
+After a change is merged to `main`:
 
-Put these in `proxy.env`: `EXTERNAL_URL=https://skylight.<tailnet>.ts.net`, `GITHUB_ALLOWED_USERS=<your handle>`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`.
+1. `git checkout main && git pull`
+2. `scripts/release.sh`. It:
+   1. refuses unless `main` is clean and matches `origin/main`
+   2. runs the smoke test
+   3. shows the commits since the last tag and asks patch, minor or major
+   4. creates and pushes the tag
+   5. deploys it with `scripts/deploy.sh` (sudo on the NAS asks for your DSM password once)
+   6. waits until the gateway reports healthy
+3. Check that claude.ai still lists the Skylight tools.
 
-### 3. Tailscale
+Use **patch** for fixes and pin bumps, **minor** for new behavior, **major** for anything that needs a new setup step.
 
-Admin console: MagicDNS and HTTPS certificates on; allow Funnel for this device in the policy file (`nodeAttrs` with `funnel`). Create a one-time, non-ephemeral, untagged auth key and put it in `ts.env` as `TS_AUTHKEY=…`. After the machine `skylight` joins, disable key expiry on it. Your tailnet name is in `TS_CERT_DOMAIN`; `serve.json` uses it, so nothing in the repo needs editing.
+## Rollback
 
-### 4. Deploy
+- **Previous version:** `scripts/deploy.sh <previous tag>`. Both scripts print the exact command after a deploy. `data/` and `auth-data/` are kept.
+- **Take it off the internet now:** `ssh ericmasiello@192.168.4.49 'sudo /usr/local/bin/docker exec skylight-mcp-nas-ts-1 tailscale funnel reset'`
+- **Stop everything:** `ssh -t ericmasiello@192.168.4.49 'cd /volume1/docker/skylight-mcp-nas && sudo /usr/local/bin/docker compose down'`, then remove the claude.ai connector.
 
-Container Manager → Project → Create from `/volume1/docker/skylight-mcp-nas`. Or over SSH:
+## Confirm gates and blocked tools
 
-```bash
-cd /volume1/docker/skylight-mcp-nas && sudo docker compose up -d --build
-sudo docker exec skylight-mcp-nas-ts-1 tailscale funnel status
-```
+`MCP_CONFIRM_MODE=ask-user` and `MCP_CONFIRM_ELICITATION=off` are set in the image. Never set `MCP_CONFIRM_MODE=auto`. A gated write tool first returns a preview and a confirm token; Claude must get your approval in chat before repeating the call with the token. Tokens are signed with `mcp_confirm_secret`, and spent tokens are recorded in `data/`, so the gate works across requests and restarts.
 
-### 5. First Skylight login
+Most write tools are not gated: single deletes such as `skylight_delete_event` run immediately. The admin tools listed in `src/blocked-tools.ts` are removed from the server entirely (ADR 0002).
 
-```bash
-npx @modelcontextprotocol/inspector   # open the UI, transport: Streamable HTTP, URL: https://skylight.<tailnet>.ts.net/mcp
-```
+## Rotation
 
-Sign in with GitHub, then call `skylight_healthcheck`. If it reports `verification_code_required`, call `skylight_submit_login_code` with the emailed code **in the same Inspector session** (the pending login lives in that session's child process). The token cache in `./data` carries later starts.
-
-### 6. claude.ai connector
-
-Customize → Connectors → Add custom connector → URL `https://skylight.<tailnet>.ts.net/mcp` → Sign in. Then, in the connector's tool settings, block tools you never want called from chat, for example `skylight_remove_user`, `skylight_delete_category`, `skylight_link_apple_calendar`.
-
-## Confirm-gated writes
-
-`MCP_CONFIRM_MODE=ask-user` and `MCP_CONFIRM_ELICITATION=off` are baked into the image. claude.ai can't show elicitation prompts, so gated writes use the two-step preview plus `confirmToken` flow; Claude must get your approval in chat before repeating the call. Never set `MCP_CONFIRM_MODE=auto`. Single deletes such as `skylight_delete_event` are not gated, so block risky tools in the connector settings.
-
-## OpenCode
-
-Leave the existing local `skylight` entry exactly as it is. To try the hosted server, add a second entry that stays disabled by default:
-
-```json
-"skylight-hosted": {
-  "type": "remote",
-  "url": "https://skylight.<tailnet>.ts.net/mcp",
-  "disabled": true
-}
-```
-
-OpenCode runs the OAuth flow with DCR on first use; `opencode mcp auth skylight-hosted` starts it by hand. Enable only one of the two entries per project: both expose the same tool names, and each logs in to Skylight separately against a rate-limited endpoint, which can trigger emailed login codes. The hosted server keeps `MCP_CONFIRM_ELICITATION=off` permanently; the local entry can drop it once OpenCode PR #53608 lands.
+- **Skylight password:** run `scripts/nas-setup.sh` again and replace `skylight_password`, then `scripts/deploy.sh <current tag>`. Delete `data/.skylight-mcp/tokens.json` on the NAS if the old sign-in misbehaves.
+- **`mcp_confirm_secret`:** replace it the same way and redeploy. Outstanding confirm tokens stop working.
+- **GitHub client secret:** regenerate it in GitHub, replace `proxy.env` with the wizard, redeploy. Deleting `auth-data/` invalidates every issued OAuth token and signing key.
+- **Tailscale key:** only needed on first join; later starts use `ts-state/`.
 
 ## Acceptance tests
 
 | # | Test | Where |
 | --- | --- | --- |
-| 1 to 3 | `./scripts/smoke-test.sh` | laptop (passes) |
-| 4 | `curl -i https://skylight.<tailnet>.ts.net/mcp` from off the tailnet → 401; `curl https://skylight.<tailnet>.ts.net/.well-known/oauth-protected-resource` → 200 JSON (no `WWW-Authenticate`, see above) | NAS |
-| 5 | Inspector OAuth: your GitHub account succeeds, another is refused | NAS |
-| 6 to 9 | `skylight_healthcheck`; `skylight_list_lists` and `skylight_list_events`; `skylight_clear_list` on a test list **without** a token (preview only, don't send the token); restart `skylight` and repeat test 6 with no new emailed code | NAS |
-| 10 | claude.ai lists events; Claude asks before any write | claude.ai |
+| 1 to 4 | `./scripts/smoke-test.sh` | laptop (passes) |
+| 5 | `curl -i https://skylight.<tailnet>.ts.net/mcp` from off the tailnet → 401; `curl https://skylight.<tailnet>.ts.net/.well-known/oauth-protected-resource` → 200 JSON | NAS |
+| 6 | GitHub sign-in: your account gets in, another account is refused | NAS |
+| 7 to 10 | `skylight_healthcheck`; `skylight_list_lists` and `skylight_list_events` return real data; `skylight_clear_list` on a test list returns a preview only (don't confirm); redeploy and repeat test 7 with no new verification code | claude.ai |
+| 11 | claude.ai lists events, shows none of the blocked tools, and asks before any write | claude.ai |
 
-## Rotation and rollback
+## Verified and not yet verified
 
-- **Skylight password:** edit `skylight_password`, `sudo docker compose up -d --force-recreate skylight`. Delete `data/.skylight-mcp/tokens.json` if the old token misbehaves.
-- **`mcp_confirm_secret`:** replace and recreate `skylight`. Outstanding preview tokens stop verifying.
-- **GitHub client secret:** regenerate in GitHub, edit `proxy.env`, recreate `auth`. Deleting `auth-data/` invalidates every issued OAuth token and signing key.
-- **Tailscale key:** only needed on first join; later restarts use `ts-state/`.
-- **Rollback:** `sudo docker compose down` and remove the connector. To go back to the previous version, check out the earlier commit and `up -d --build`; `data/` and `auth-data/` are kept. To take the endpoint off the internet immediately: `sudo docker exec skylight-mcp-nas-ts-1 tailscale funnel reset`.
-- **Fallbacks** if claude.ai can't finish the OAuth flow: supergateway `--apiKey` plus a claude.ai Request header, if offered; otherwise `tailscale serve` only and use it from your tailnet. Never ship a secret-path-only public endpoint.
-
-## Still open for you
-
-- Does the Skylight account have more than one frame? If so, add `SKYLIGHT_FRAME_ID` (a third secret or an `environment:` entry on `skylight`).
-- Pro/Max (you add the connector) or Team (an Owner adds it)?
-- Which tools to block in the connector from day one?
+- **Verified locally:** the gateway serves 106 tools on Node 26 from a read-only, non-root container; separate clients share one Skylight sign-in (a test against a fake Skylight sees 1 login for 5 concurrent clients, and 5 when sharing is deliberately broken); blocked tools are neither listed nor callable; no known vulnerabilities.
+- **mcp-auth-proxy v2.10.2** returns 401 without a `WWW-Authenticate` header but serves `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`, and supports dynamic client registration at `POST /.idp/register`. Its GitHub callback is `{EXTERNAL_URL}/.auth/github/callback`. Whether claude.ai finds the sign-in flow without the header is only proven by test 11.
+- **Not yet run:** anything on the NAS, the Tailscale container, the real Skylight sign-in and verification code, and OpenCode's OAuth flow.
+- **If claude.ai can't finish the OAuth flow:** use `tailscale serve` (tailnet only) instead of Funnel, or put a different OAuth proxy in front. Never ship a public endpoint protected only by a secret path.

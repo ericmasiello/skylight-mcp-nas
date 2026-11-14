@@ -1,6 +1,6 @@
 #!/bin/sh
 # Reads Docker secret files into the environment skylight-mcp expects, then
-# execs supergateway. Secret values are never printed.
+# execs the gateway. Secret values are never printed.
 set -eu
 
 read_secret() {
@@ -22,15 +22,6 @@ SKYLIGHT_PASSWORD="$(require_secret skylight_password)"
 MCP_CONFIRM_SECRET="$(require_secret mcp_confirm_secret)"
 export SKYLIGHT_EMAIL SKYLIGHT_PASSWORD MCP_CONFIRM_SECRET
 
-# Stateful: supergateway starts one skylight-mcp child per client session.
-# Stateless would spawn one per request and lose an in-flight emailed-login-code
-# flow. Bind loopback only; the local override sets GATEWAY_HOST=0.0.0.0.
-exec /app/node_modules/.bin/supergateway \
-  --stdio "node /app/node_modules/skylight-mcp/dist/index.js" \
-  --outputTransport streamableHttp \
-  --stateful \
-  --sessionTimeout "${SESSION_TIMEOUT_MS:-1800000}" \
-  --host "${GATEWAY_HOST:-127.0.0.1}" \
-  --port 8001 \
-  --streamableHttpPath /mcp \
-  --logLevel info
+# The gateway binds loopback unless GATEWAY_HOST says otherwise; the local
+# override sets 0.0.0.0.
+exec node /app/src/server.ts
