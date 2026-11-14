@@ -73,13 +73,13 @@ You need: DSM 7.2+ with **Container Manager** and **Git Server** (Package Center
 3. **Disable key expiry:** at <https://login.tailscale.com/admin/machines>, click `skylight` → … → Disable key expiry.
 4. **Add the claude.ai connector:** Settings → Connectors → Add custom connector → URL `https://skylight.<tailnet>.ts.net/mcp` → Connect, then sign in with GitHub. The 10 admin tools are already gone. Use the connector's tool switches for anything else you don't want claude.ai to call.
 5. **First Skylight sign-in:** in claude.ai, ask Claude to run `skylight_healthcheck`. If Skylight emails a verification code, give it to Claude to submit with `skylight_submit_login_code`. Any client and any chat can submit it, because all MCP sessions share one Skylight sign-in. The token cache in `data/` carries over restarts and redeploys.
-6. **OpenCode:** replace the local `npx` skylight entry in your OpenCode config with the hosted one, then run `opencode mcp auth skylight` to sign in with GitHub:
+6. **OpenCode:** point the `skylight` server at the hosted URL (OpenCode V2 shape; in Eric's setup this lives in `ericmasiello-skills`' two `opencode.json` files):
 
-   ```json
-   "skylight": { "type": "remote", "url": "https://skylight.<tailnet>.ts.net/mcp" }
+   ```jsonc
+   "mcp": { "servers": { "skylight": { "type": "remote", "url": "https://skylight.<tailnet>.ts.net/mcp" } } }
    ```
 
-   Don't keep both. A local `npx` copy has its own Skylight sign-in, and the two would trigger verification codes against each other. Whether OpenCode's OAuth flow works with mcp-auth-proxy is not yet tested.
+   Then run `/mcps` in OpenCode, select `skylight` and sign in with GitHub. Don't keep a local `npx skylight-mcp` entry too: it would have its own Skylight sign-in, and the two would trigger verification codes against each other.
 
 ## Shipping a change
 
