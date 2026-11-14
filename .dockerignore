@@ -1,0 +1,11 @@
+.git
+.env
+*.env
+secrets/
+secrets.example/
+data/
+ts-state/
+auth-data/
+node_modules/
+README.md
+scripts/

@@ -1,0 +1,11 @@
+{
+  "name": "skylight-mcp-nas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned dependencies for hosting skylight-mcp behind supergateway on a Synology NAS",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "skylight-mcp": "1.6.2",
+    "supergateway": "4.2.2"
+  }
+}

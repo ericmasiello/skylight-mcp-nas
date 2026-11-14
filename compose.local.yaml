@@ -1,0 +1,15 @@
+# Local test override: no Tailscale, no auth proxy, dummy secrets.
+#   SECRETS_DIR=<dir with dummy secret files> \
+#   docker compose -f compose.yaml -f compose.local.yaml up --build skylight
+services:
+  ts:
+    profiles: [nas-only]
+  auth:
+    profiles: [nas-only]
+  skylight:
+    network_mode: !reset null
+    depends_on: !reset []
+    environment:
+      - GATEWAY_HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:8001:8001"

@@ -1,0 +1,8 @@
+.env
+*.env
+!secrets.example/*.env
+secrets/
+data/
+ts-state/
+auth-data/
+node_modules/
