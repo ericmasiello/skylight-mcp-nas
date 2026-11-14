@@ -3,7 +3,7 @@
 # gateway to report healthy. Also the rollback command: deploy the previous tag.
 #   scripts/deploy.sh v0.1.2
 # Reads NAS_HOST and NAS_USER from .nas-setup.env (written by nas-setup.sh).
-# sudo on the NAS asks for your DSM password once.
+# sudo on the NAS asks once for your Synology DSM password (not the Mac one).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,18 +28,19 @@ git fetch --quiet --tags --force origin
 previous=\$(git describe --tags --exact-match 2>/dev/null || echo none)
 git -c advice.detachedHead=false checkout --quiet 'refs/tags/$TAG'
 DOCKER=\$(command -v docker || echo /usr/local/bin/docker)
+docker_() { sudo -p "Synology DSM password for %u (not your Mac password): " "\$DOCKER" "\$@"; }
 echo "deploy: \$previous -> $TAG; building (tests run inside the build)"
-sudo "\$DOCKER" compose up -d --build
-container=\$(sudo "\$DOCKER" compose ps -q skylight)
+docker_ compose up -d --build
+container=\$(docker_ compose ps -q skylight)
 status=starting
 for _ in \$(seq 1 30); do
-  status=\$(sudo "\$DOCKER" inspect --format '{{.State.Health.Status}}' "\$container")
+  status=\$(docker_ inspect --format '{{.State.Health.Status}}' "\$container")
   [ "\$status" = healthy ] && break
   sleep 2
 done
 if [ "\$status" != healthy ]; then
   echo "deploy: skylight is \$status, not healthy. Logs:" >&2
-  sudo "\$DOCKER" compose logs --tail 40 skylight >&2
+  docker_ compose logs --tail 40 skylight >&2
   echo "deploy: roll back with: scripts/deploy.sh \$previous" >&2
   exit 1
 fi
@@ -49,6 +50,7 @@ EOF
 )
 # Sent base64-encoded so no quoting depends on the NAS login shell; sudo reads
 # the password from the terminal ssh -t allocates, not from the pipe.
+echo "deploy: sudo on the NAS will ask for your Synology DSM password (not your Mac password)."
 SSH_OPTS=()
 ssh -G -o WarnWeakCrypto=no localhost >/dev/null 2>&1 && SSH_OPTS+=(-o WarnWeakCrypto=no)
 ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} -t "$NAS" "echo $(printf '%s' "$remote" | base64 | tr -d '\n') | base64 -d | bash"

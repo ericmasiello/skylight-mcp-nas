@@ -274,7 +274,7 @@ if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$NAS" true 2>/dev/null; then
   fi
   # One plain ssh call: installs the key and fixes permissions (sshd ignores
   # keys in a group-writable home), so there is exactly one password prompt.
-  say "Copying your public key to the NAS. Enter your DSM password once when asked."
+  say "Copying your public key to the NAS. At the 'password:' prompt, enter your Synology DSM password (not your Mac password)."
   ssh -o PreferredAuthentications=password,keyboard-interactive "$NAS" \
     'umask 077 && mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys' \
     < "$HOME/.ssh/id_ed25519.pub"
@@ -389,8 +389,8 @@ pause
 # ── 8 ─────────────────────────────────────────────────────────────────────
 stage "File ownership (needs sudo on the NAS)"
 say "The Skylight container runs as uid 1000, so it must own its secret files and"
-say "the data folder. Enter your DSM password when sudo asks."
-ssh -t "$NAS" "sudo sh -c 'cd \"$NAS_SECRETS_DIR\" && chown 1000:1000 skylight_email skylight_password mcp_confirm_secret && chmod 400 skylight_email skylight_password mcp_confirm_secret && chown root:root proxy.env ts.env && chmod 400 proxy.env ts.env && chown 1000:1000 \"$NAS_REPO_DIR/data\"'"
+say "the data folder. sudo will ask for your Synology DSM password (not your Mac password)."
+ssh -t "$NAS" "sudo -p 'Synology DSM password for %u (not your Mac password): ' sh -c 'cd \"$NAS_SECRETS_DIR\" && chown 1000:1000 skylight_email skylight_password mcp_confirm_secret && chmod 400 skylight_email skylight_password mcp_confirm_secret && chown root:root proxy.env ts.env && chmod 400 proxy.env ts.env && chown 1000:1000 \"$NAS_REPO_DIR/data\"'"
 printf '  %s✓%s ownership set\n' "$GREEN" "$RESET"
 pause
 
