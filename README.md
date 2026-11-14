@@ -83,9 +83,9 @@ You need: DSM 7.2+ with **Container Manager** and **Git Server** (Package Center
 
 ## Shipping a change
 
-After a change is merged to `main`:
+After a change is on `main` (merged from a PR, or committed locally on `main`):
 
-1. `git checkout main && git pull`
+1. `git checkout main && git pull`, then `git push origin main` if you committed locally; `release.sh` refuses to run until `main` matches GitHub.
 2. `scripts/release.sh`. It:
    1. refuses unless `main` is clean and matches `origin/main`
    2. runs the smoke test
