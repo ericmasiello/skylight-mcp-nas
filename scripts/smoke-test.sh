@@ -65,6 +65,11 @@ if find secrets.example -type f ! -name '*.env' -size +0 | grep -q .; then
 fi
 pass "no credentials in image or repo"
 
+# The auth proxy appends the request path to its backend URL, so a path here
+# turns /mcp into /mcp/mcp (404 on the NAS, invisible locally).
+grep -q '"--", "http://127.0.0.1:8001"\]' compose.yaml || fail "auth backend URL in compose.yaml must have no path"
+pass "auth proxy backend URL has no path"
+
 echo "== Test 3: empty secret makes the entrypoint exit non-zero before the gateway starts"
 SECRETS_DIR="$PWD/secrets.example" "${COMPOSE[@]}" down >/dev/null 2>&1 || true
 set +e

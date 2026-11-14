@@ -25,7 +25,9 @@ services:
       - DATA_PATH=/data
     volumes:
       - ./auth-data:/data           # signing keys and OAuth state; must persist
-    command: ["--", "http://127.0.0.1:8001/mcp"]
+    # No path: the proxy appends the incoming path (Go's ProxyRequest.SetURL),
+    # so /mcp reaches the gateway as /mcp. ".../mcp" here would make it /mcp/mcp.
+    command: ["--", "http://127.0.0.1:8001"]
     restart: unless-stopped
 
   skylight:
