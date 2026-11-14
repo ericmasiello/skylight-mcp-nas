@@ -210,8 +210,19 @@ NAS_SECRETS_DIR=/volume1/docker/secrets/skylight
 REPO_URL=https://github.com/ericmasiello/skylight-mcp-nas.git
 NAS=""
 
+# DSM's SSH server predates post-quantum key exchange, and OpenSSH 10.1+
+# warns about that on every connection. Silence it where the client knows the
+# option; older clients would reject it.
+SSH_OPTS=()
+command ssh -G -o WarnWeakCrypto=no localhost >/dev/null 2>&1 && SSH_OPTS+=(-o WarnWeakCrypto=no)
+ssh() { command ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$@"; }
+
+# Synology gives non-interactive SSH a short PATH; docker and Git Server's git
+# live outside it.
+NAS_PATH='PATH="$PATH:/usr/local/bin:/var/packages/Git/target/bin"'
+
 # nas CMD runs CMD on the NAS without a terminal (no sudo).
-nas() { ssh -o BatchMode=yes "$NAS" "$1"; }
+nas() { ssh -o BatchMode=yes "$NAS" "$NAS_PATH; $1"; }
 
 # remote_exists NAME: the secret file exists and is non-empty on the NAS.
 remote_exists() { nas "test -s '$NAS_SECRETS_DIR/$1'"; }
@@ -280,7 +291,7 @@ nas 'grep -E "^(productversion|buildnumber)=" /etc.defaults/VERSION' | sed 's/^/
 missing=()
 nas 'test -d /volume1/docker' || missing+=("the docker shared folder on Volume 1 (install Container Manager)")
 nas 'command -v git >/dev/null' || missing+=("git: Package Center → install 'Git Server'")
-nas 'command -v docker >/dev/null || test -x /usr/local/bin/docker' \
+nas 'command -v docker >/dev/null' \
   || missing+=("docker: Package Center → install 'Container Manager'")
 if (( ${#missing[@]} )); then
   for m in "${missing[@]}"; do warn "missing $m"; done

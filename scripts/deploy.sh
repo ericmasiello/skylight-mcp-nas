@@ -22,6 +22,7 @@ git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null \
 # /usr/local/bin, hence the absolute docker path.
 remote=$(cat <<EOF
 set -eu
+export PATH="\$PATH:/usr/local/bin:/var/packages/Git/target/bin"
 cd '$NAS_REPO_DIR'
 git fetch --quiet --tags --force origin
 previous=\$(git describe --tags --exact-match 2>/dev/null || echo none)
@@ -48,4 +49,6 @@ EOF
 )
 # Sent base64-encoded so no quoting depends on the NAS login shell; sudo reads
 # the password from the terminal ssh -t allocates, not from the pipe.
-ssh -t "$NAS" "echo $(printf '%s' "$remote" | base64 | tr -d '\n') | base64 -d | bash"
+SSH_OPTS=()
+ssh -G -o WarnWeakCrypto=no localhost >/dev/null 2>&1 && SSH_OPTS+=(-o WarnWeakCrypto=no)
+ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} -t "$NAS" "echo $(printf '%s' "$remote" | base64 | tr -d '\n') | base64 -d | bash"
