@@ -59,6 +59,10 @@ _Avoid_: session, auth
 An app that uses the Skylight server, such as claude.ai or OpenCode.
 _Avoid_: connector, host
 
+**Client token**:
+The secret a client sends to the gateway on every request; each client has its own, so one can be revoked without the others.
+_Avoid_: API key, password
+
 **Connector**:
 claude.ai's saved entry for the Skylight server's URL, where Eric signs in and switches individual tools on or off.
 _Avoid_: integration, plugin

@@ -9,6 +9,9 @@ cd "$(dirname "$0")/.."
 
 TAG="${1:?usage: scripts/deploy.sh <tag>}"
 NAS_REPO_DIR=/volume1/docker/skylight-mcp-nas
+NAS_SECRETS_DIR=/volume1/docker/secrets/skylight
+# Secret files a release needs that older setups may lack (client tokens, ADR 0003).
+REQUIRED_SECRETS="proxy_token.env client_token_auth_proxy client_token_ixl_nas"
 
 [[ -f .nas-setup.env ]] || { echo "deploy: no .nas-setup.env; run scripts/nas-setup.sh first" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -23,6 +26,14 @@ git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null \
 remote=$(cat <<EOF
 set -eu
 export PATH="\$PATH:/usr/local/bin:/var/packages/Git/target/bin"
+# Stop before touching anything if this release's secret files aren't there
+# yet. test -s only stats them, so no sudo: the folder is ours, mode 700.
+for f in $REQUIRED_SECRETS; do
+  if [ ! -s "$NAS_SECRETS_DIR/\$f" ]; then
+    echo "deploy: $NAS_SECRETS_DIR/\$f is missing or empty; run scripts/nas-setup.sh first. Nothing was changed." >&2
+    exit 1
+  fi
+done
 cd '$NAS_REPO_DIR'
 git fetch --quiet --tags --force origin
 previous=\$(git describe --tags --exact-match 2>/dev/null || echo none)

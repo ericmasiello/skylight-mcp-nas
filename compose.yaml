@@ -17,8 +17,11 @@ services:
     image: ghcr.io/sigbit/mcp-auth-proxy:v2.10.2
     network_mode: service:ts
     depends_on: [ts, skylight]
-    # GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_ALLOWED_USERS, EXTERNAL_URL
-    env_file: ${SECRETS_DIR:-/volume1/docker/secrets/skylight}/proxy.env
+    # proxy_token.env sends the auth proxy's own client token to the gateway
+    # (ADR 0003); a separate file, so proxy.env never needs re-entering.
+    env_file:
+      - ${SECRETS_DIR:-/volume1/docker/secrets/skylight}/proxy.env        # GITHUB_*, EXTERNAL_URL
+      - ${SECRETS_DIR:-/volume1/docker/secrets/skylight}/proxy_token.env  # PROXY_BEARER_TOKEN=...
     environment:
       - NO_AUTO_TLS=true
       - LISTEN=:8000
@@ -36,7 +39,8 @@ services:
     depends_on: [ts]
     read_only: true
     tmpfs: [/tmp]
-    secrets: [skylight_email, skylight_password, mcp_confirm_secret]
+    secrets: [skylight_email, skylight_password, mcp_confirm_secret,
+              client_token_auth_proxy, client_token_ixl_nas]
     volumes:
       - ./data:/data                # token cache; must persist
     restart: unless-stopped
@@ -48,3 +52,7 @@ secrets:
     file: ${SECRETS_DIR:-/volume1/docker/secrets/skylight}/skylight_password
   mcp_confirm_secret:
     file: ${SECRETS_DIR:-/volume1/docker/secrets/skylight}/mcp_confirm_secret
+  client_token_auth_proxy:   # same value as PROXY_BEARER_TOKEN in proxy_token.env
+    file: ${SECRETS_DIR:-/volume1/docker/secrets/skylight}/client_token_auth_proxy
+  client_token_ixl_nas:      # ixl-nas holds a copy as /volume1/docker/secrets/ixl/skylight_token
+    file: ${SECRETS_DIR:-/volume1/docker/secrets/skylight}/client_token_ixl_nas

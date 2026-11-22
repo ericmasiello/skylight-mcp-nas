@@ -246,7 +246,7 @@ keep_remote() {
 
 run_wizard() {
 
-TOTAL_STAGES=8
+TOTAL_STAGES=9
 ENV_FILE="$REPO_ROOT/.nas-setup.env"
 
 banner "Skylight NAS setup"
@@ -319,7 +319,7 @@ printf '  %s✓%s code and folders ready\n' "$GREEN" "$RESET"
 pause
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Tailscale: tailnet name, HTTPS and Funnel"
+stage "Tailscale: tailnet name, HTTPS, Funnel and policy"
 open_url "https://login.tailscale.com/admin/dns"
 step "On the DNS page, make sure MagicDNS is enabled."
 step "Under HTTPS Certificates, click Enable HTTPS (skip if already on)."
@@ -328,17 +328,34 @@ ask TAILNET "Tailnet name (e.g. tail1234.ts.net):"
 TAILNET="${TAILNET#https://}"; TAILNET="${TAILNET%/}"
 write_env TAILNET "$TAILNET"
 open_url "https://login.tailscale.com/admin/acls/file"
-step "In the policy file, look for a \"nodeAttrs\" entry granting \"funnel\"."
-step "If there is none, paste this on a new line just before the file's last closing }:"
-note '    "nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}],'
+warn "Upgrading a running setup? Skip this policy edit now and follow the README's"
+warn "rollout order instead: tagging skylight before the policy is ready breaks Funnel."
+step "In the policy file, add these entries (keep anything else already there):"
+note '    "tagOwners": {'
+note '      "tag:skylight": ["autogroup:admin"],'
+note '      "tag:ixl-nas":  ["autogroup:admin"],'
+note '    },'
+note '    "grants": ['
+note '      {"src": ["autogroup:member"], "dst": ["autogroup:member"], "ip": ["*"]},'
+note '      {"src": ["autogroup:member"], "dst": ["tag:skylight"], "ip": ["tcp:443"]},'
+note '      {"src": ["tag:ixl-nas"], "dst": ["tag:skylight"], "ip": ["tcp:8001"]},'
+note '    ],'
+note '    "nodeAttrs": [{"target": ["tag:skylight"], "attr": ["funnel"]}],'
+step "Remove the default allow-all rule, in either form:"
+note '    "acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]'
+note '    "grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"]}]'
+note "  Your devices reach each other and skylight:443 (OpenCode uses it over MagicDNS);"
+note "  only ixl-nas reaches the gateway on skylight:8001. Exit nodes and subnet routes"
+note "  need their own grant (autogroup:internet)."
 step "Click Save."
-pause "Press Enter when MagicDNS, HTTPS and Funnel are set."
+pause "Press Enter when MagicDNS, HTTPS, Funnel and the policy are set."
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
 stage "Tailscale: auth key"
 if ! keep_remote ts.env "The Tailscale auth key"; then
   open_url "https://login.tailscale.com/admin/settings/keys"
-  step "Click 'Generate auth key…'. Leave Reusable OFF and Ephemeral OFF; add no tags."
+  step "Click 'Generate auth key…'. Leave Reusable OFF and Ephemeral OFF."
+step "Under Tags, add tag:skylight (tagged devices also have key expiry off)."
   step "Click Generate, then copy the key (starts tskey-auth-)."
   ask_secret TS_AUTHKEY "Paste the auth key:"
   [[ "$TS_AUTHKEY" == tskey-* ]] || warn "that doesn't start with tskey-; double-check it"
@@ -387,10 +404,27 @@ fi
 pause
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
+stage "Client tokens"
+say "Each client of the gateway sends its own random token (ADR 0003). Replacing"
+say "one here is how you rotate or revoke it; redeploy afterwards (see the README)."
+# One value into both files in one SSH call, so the auth proxy's two copies
+# can't drift apart. It lives only in the pipe and a remote shell variable.
+if ! { remote_exists proxy_token.env && keep_remote client_token_auth_proxy "The auth proxy's client token"; }; then
+  say "Generating the auth proxy's client token (client_token_auth_proxy and proxy_token.env)."
+  openssl rand -hex 32 | tr -d '\n' | nas "umask 077 && cd '$NAS_SECRETS_DIR' && rm -f client_token_auth_proxy proxy_token.env && t=\$(cat) && printf '%s' \"\$t\" > client_token_auth_proxy && printf 'PROXY_BEARER_TOKEN=%s\n' \"\$t\" > proxy_token.env"
+  printf '  %s✓ wrote%s %s and proxy_token.env on the NAS\n' "$GREEN" "$RESET" "$NAS_SECRETS_DIR/client_token_auth_proxy"
+fi
+if ! keep_remote client_token_ixl_nas "The ixl-nas client token"; then
+  say "Generating the ixl-nas client token (ixl-nas's own setup copies it on the NAS)."
+  openssl rand -hex 32 | tr -d '\n' | put_remote client_token_ixl_nas
+fi
+pause
+
+# ── 9 ─────────────────────────────────────────────────────────────────────
 stage "File ownership (needs sudo on the NAS)"
 say "The Skylight container runs as uid 1000, so it must own its secret files and"
 say "the data folder. sudo will ask for your Synology DSM password (not your Mac password)."
-ssh -t "$NAS" "sudo -p 'Synology DSM password for %u (not your Mac password): ' sh -c 'cd \"$NAS_SECRETS_DIR\" && chown 1000:1000 skylight_email skylight_password mcp_confirm_secret && chmod 400 skylight_email skylight_password mcp_confirm_secret && chown root:root proxy.env ts.env && chmod 400 proxy.env ts.env && chown 1000:1000 \"$NAS_REPO_DIR/data\"'"
+ssh -t "$NAS" "sudo -p 'Synology DSM password for %u (not your Mac password): ' sh -c 'cd \"$NAS_SECRETS_DIR\" && chown 1000:1000 skylight_email skylight_password mcp_confirm_secret client_token_auth_proxy client_token_ixl_nas && chmod 400 skylight_email skylight_password mcp_confirm_secret client_token_auth_proxy client_token_ixl_nas && chown root:root proxy.env proxy_token.env ts.env && chmod 400 proxy.env proxy_token.env ts.env && chown 1000:1000 \"$NAS_REPO_DIR/data\"'"
 printf '  %s✓%s ownership set\n' "$GREEN" "$RESET"
 pause
 
@@ -398,8 +432,6 @@ finish
 say "Next:"
 step "Make sure the GitHub repo is public (the NAS clones it over plain HTTPS)."
 step "Run scripts/release.sh to tag the first version and deploy it."
-step "After the machine 'skylight' appears in Tailscale, open"
-note "    https://login.tailscale.com/admin/machines → skylight → … → Disable key expiry."
 step "Then follow 'First Skylight sign-in' in the README."
 printf '\n'
 }

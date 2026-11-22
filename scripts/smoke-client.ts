@@ -1,12 +1,21 @@
 // Connects to a running gateway, lists every tool and checks that none of the
 // blocked tools is exposed. Prints the tool count; exits 1 on any failure.
-//   node scripts/smoke-client.ts http://127.0.0.1:8001/mcp
+// The client token comes from the environment, never argv, so it stays out of
+// ps; without GATEWAY_TOKEN it connects with no token (and should be refused).
+//   GATEWAY_TOKEN=… node scripts/smoke-client.ts http://127.0.0.1:8001/mcp
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { BLOCKED_TOOLS } from '../src/blocked-tools.ts';
 
 const url = process.argv[2] ?? 'http://127.0.0.1:8001/mcp';
+const token = process.env.GATEWAY_TOKEN;
+const requestInit = token === undefined ? {} : { headers: { Authorization: `Bearer ${token}` } };
 const client = new Client({ name: 'skylight-mcp-nas-smoke', version: '0.0.0' });
-await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+try {
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit }));
+} catch (error) {
+  console.error(`smoke client: could not connect: ${(error as Error).message}`);
+  process.exit(1);
+}
 
 const names: string[] = [];
 let cursor: string | undefined;
