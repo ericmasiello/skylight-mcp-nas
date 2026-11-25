@@ -85,6 +85,27 @@ You need: DSM 7.2+ with **Container Manager** and **Git Server** (Package Center
    ```
 
    Then run `/mcps` in OpenCode, select `skylight` and sign in with GitHub. Don't keep a local `npx skylight-mcp` entry too: it would have its own Skylight sign-in, and the two would trigger verification codes against each other.
+6. **Boot-up task:** if DSM doesn't have the `Start Docker projects` task yet, add it as [After a NAS reboot](#after-a-nas-reboot) says. Without it, a reboot leaves `auth` and `skylight` stopped: Funnel answers `502` and claude.ai's connector fails.
+
+## After a NAS reboot
+
+`ts` comes back on its own after a reboot, but the containers that share its network (`network_mode: service:ts`) may not: if Docker starts one before `ts` is running, that start fails and Docker doesn't try it again. This happened on 2026-11-25. The NAS rebooted at 04:34, and `auth`, `skylight` and ixl-nas's `ixl` stayed stopped: Funnel answered `502` and claude.ai's connector failed until they were started by hand.
+
+A DSM boot-up task starts both projects after every reboot. It was added on 2026-11-25, and one task covers both ixl-nas and this repo:
+
+1. DSM → **Control Panel → Task Scheduler → Create → Triggered Task → User-defined script**.
+2. **General:** Task `Start Docker projects`, User **root**, Event **Boot-up**, Enabled.
+3. **Task Settings → Run command:**
+
+   ```sh
+   sleep 90
+   cd /volume1/docker/skylight-mcp-nas && /usr/local/bin/docker compose up -d
+   cd /volume1/docker/ixl-nas && /usr/local/bin/docker compose up -d
+   ```
+
+`sleep 90` lets Docker and both `ts` containers start first. `docker compose up -d` starts any of the project's containers that aren't running and leaves the rest alone: nothing is rebuilt or redeployed, so it's safe to run any time (select the task → **Run**). If a project moves or a new one shares a `ts` container the same way, add its line here.
+
+By hand, after a reboot without the task: `ssh -t ericmasiello@192.168.4.49 'cd /volume1/docker/<project> && sudo /usr/local/bin/docker compose up -d'`.
 
 ## Client tokens
 
